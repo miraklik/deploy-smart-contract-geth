@@ -3,28 +3,22 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
 	"log"
 	"math/big"
-
 	"os"
 
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 func main() {
-	ctx := context.Background()
+
 	client, err := ethclient.Dial("https://mainnet.infura.io/v3/dfa0335a8d2b4364bd669159aa3dc734")
 	if err != nil {
-		log.Fatal("Unable to connect to node", err)
+		log.Fatal(err)
 	}
-
-	log.Println("Connected to node")
 
 	privateKeyHex, exists := os.LookupEnv("PRIVATE_KEY")
 	if !exists {
@@ -33,56 +27,46 @@ func main() {
 
 	privateKey, err := crypto.HexToECDSA(privateKeyHex)
 	if err != nil {
-		log.Fatal("Unable to get private key", err)
+		log.Fatal(err)
 	}
 
 	publicKey := privateKey.Public()
 	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
 	if !ok {
-		log.Fatal("Unable to get public key")
+		log.Fatal("cannot assert type: publicKey is not of type *ecdsa.PublicKey")
 	}
 
 	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
-	nonce, err := client.PendingNonceAt(ctx, fromAddress)
+	nonce, err := client.PendingNonceAt(context.Background(), fromAddress)
 	if err != nil {
-		log.Fatal("Unable to get nonce", err)
+		log.Fatal(err)
 	}
 
-	value := big.NewInt(1000000000000000000)
-	gasLimit := uint64(21000)
-	gasPrice, err := client.SuggestGasPrice(ctx)
+	gasPrice, err := client.SuggestGasPrice(context.Background())
 	if err != nil {
-		log.Fatal("Unable to get gas price", err)
+		log.Fatal(err)
 	}
 
-	toAddress := common.HexToAddress(GenerateRandomWalletAddress())
-	tx := types.NewTransaction(nonce, toAddress, value, gasLimit, gasPrice, nil)
-
-	chainID, err := client.NetworkID(ctx)
+	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, big.NewInt(1))
 	if err != nil {
-		log.Fatal("Unable to get network ID", err)
+		log.Fatal(err)
+	}
+	auth.Nonce = big.NewInt(int64(nonce))
+	auth.Value = big.NewInt(0)
+	auth.GasLimit = uint64(3000000)
+	auth.GasPrice = gasPrice
+
+	byteCodeCheck, exists := os.LookupEnv("BYTECODE_CHECK")
+	if !exists {
+		log.Fatal("BYTECODE_CHECK environment variable is not set")
 	}
 
-	signetTx, err := types.SignTx(tx, types.EIP155Signer(chainID), privateKey)
+	bytecode := common.FromHex(byteCodeCheck)
+
+	address, tx, _, err := bind.DeployContract(auth, bind.ContractBackend(client), nil, bytecode, nil)
 	if err != nil {
-		log.Fatal("Unable to sign transaction", err)
+		log.Fatal(err)
 	}
 
-	err = client.SendTransaction(ctx, tx)
-	if err != nil {
-		log.Fatal("Unable to send transaction", err)
-	}
-
-	log.Printf("Transaction sent: %s", signetTx.Hash().Hex())
-}
-
-func GenerateRandomWalletAddress() string {
-	const walletLength = 20 // это в байтах (20 байт = 40 символа)
-	bytes := make([]byte, walletLength)
-
-	if _, err := rand.Read(bytes); err != nil {
-		panic(fmt.Sprintf("Failed to generate random bytes: %v", err))
-	}
-	r
-	return "0x" + hex.EncodeToString(bytes)
+	log.Printf("Contract deployed! Address: %s, Transaction: %s", address.Hex(), tx.Hash().Hex())
 }
